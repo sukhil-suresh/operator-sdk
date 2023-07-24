@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"strings"
 
 	jsonpatch "gomodules.xyz/jsonpatch/v3"
@@ -217,7 +218,8 @@ func (m manager) UpgradeRelease(ctx context.Context, opts ...UpgradeOption) (*rp
 		// Workaround for helm/helm#3338
 		if upgradedRelease != nil {
 			rollback := action.NewRollback(m.actionConfig)
-			rollback.Force = true
+			rollback.Force = false
+			logf.Log.WithName("rollback-debugger").Info("=========================== rollback.Force is false")
 
 			// As of Helm 2.13, if UpgradeRelease returns a non-nil release, that
 			// means the release was also recorded in the release store.

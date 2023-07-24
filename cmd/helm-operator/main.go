@@ -15,6 +15,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/spf13/cobra"
@@ -36,6 +37,8 @@ project's image entrypoint
 
 	root.AddCommand(run.NewCmd())
 	root.AddCommand(version.NewCmd())
+
+	fmt.Println("am I hacked?")
 
 	if err := root.Execute(); err != nil {
 		log.Fatal(err)
