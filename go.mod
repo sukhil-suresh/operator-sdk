@@ -7,10 +7,12 @@ require (
 	github.com/fatih/structtag v1.1.0
 	github.com/go-logr/logr v1.4.2
 	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572
+	github.com/go-test/deep v1.1.1
 	github.com/iancoleman/strcase v0.3.0
 	github.com/kr/text v0.2.0
 	github.com/markbates/inflect v1.0.4
 	github.com/maxbrunsfeld/counterfeiter/v6 v6.9.0
+	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/onsi/ginkgo/v2 v2.20.2
 	github.com/onsi/gomega v1.34.2
 	github.com/operator-framework/ansible-operator-plugins v1.36.1
@@ -43,6 +45,11 @@ require (
 	sigs.k8s.io/controller-tools v0.14.0
 	sigs.k8s.io/kubebuilder/v4 v4.1.1
 	sigs.k8s.io/yaml v1.4.0
+)
+
+replace (
+	github.com/operator-framework/operator-lib => /Users/sukhil.suresh/ws/operator-lib
+	sigs.k8s.io/controller-runtime => /Users/sukhil.suresh/ws/controller-runtime
 )
 
 require (

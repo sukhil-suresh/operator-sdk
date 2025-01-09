@@ -198,11 +198,16 @@ func run(cmd *cobra.Command, f *flags.Flags) {
 			Selector:                w.Selector,
 			DryRunOption:            w.DryRunOption,
 		})
+
+		log.Info(fmt.Sprintf("*************** %s: %t", w.Kind, *w.WatchDependentResources))
+
 		if err != nil {
 			log.Error(err, "Failed to add manager factory to controller.")
 			os.Exit(1)
 		}
 	}
+
+	log.Info("*************** DEBUG MODE3 *************** ")
 
 	// Start the Cmd
 	if err = mgr.Start(signals.SetupSignalHandler()); err != nil {

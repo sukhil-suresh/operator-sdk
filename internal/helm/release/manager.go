@@ -134,6 +134,17 @@ func (m *manager) Sync() error {
 	if err != nil {
 		return fmt.Errorf("failed to get candidate release: %w", err)
 	}
+
+	//dmp := diffmatchpatch.New()
+	//diffs := dmp.DiffMain(deployedRelease.Manifest, candidateRelease.Manifest, false)
+	//fmt.Println()
+	//fmt.Println()
+	//fmt.Println("___________________________________________________________________________")
+	//fmt.Println(dmp.DiffPrettyText(diffs))
+	//fmt.Println("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
+	//fmt.Println()
+	//fmt.Println()
+
 	if deployedRelease.Manifest != candidateRelease.Manifest {
 		m.isUpgradeRequired = true
 	}
@@ -305,6 +316,7 @@ func reconcileRelease(_ context.Context, kubeClient kube.Interface, expectedMani
 			return nil
 		}
 
+		//fmt.Println(fmt.Sprintf("** namespace: %s, name: %s, patchType: %s, patch: %s", expected.Namespace, expected.Name, patchType, patch))
 		_, err = helper.Patch(expected.Namespace, expected.Name, patchType, patch,
 			&metav1.PatchOptions{})
 		if err != nil {

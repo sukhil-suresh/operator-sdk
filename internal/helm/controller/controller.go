@@ -15,7 +15,11 @@
 package controller
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"github.com/sergi/go-diff/diffmatchpatch"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +42,8 @@ import (
 	"github.com/operator-framework/operator-lib/predicate"
 	"github.com/operator-framework/operator-sdk/internal/helm/release"
 	"github.com/operator-framework/operator-sdk/internal/util/k8sutil"
+	k8sjson "k8s.io/apimachinery/pkg/runtime/serializer/json"
+	predicate2 "sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
 var log = logf.Log.WithName("helm.controller")
@@ -58,6 +64,7 @@ type WatchOptions struct {
 
 // Add creates a new helm operator controller and adds it to the manager
 func Add(mgr manager.Manager, options WatchOptions) error {
+	mgr.GetClient()
 	controllerName := fmt.Sprintf("%v-controller", strings.ToLower(options.GVK.Kind))
 
 	r := &HelmOperatorReconciler{
@@ -82,17 +89,117 @@ func Add(mgr manager.Manager, options WatchOptions) error {
 	o := &unstructured.Unstructured{}
 	o.SetGroupVersionKind(options.GVK)
 
-	if err := c.Watch(source.Kind(mgr.GetCache(), client.Object(o), &libhandler.InstrumentedEnqueueRequestForObject[client.Object]{})); err != nil {
+	var customPredicates = predicate2.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			log.Info("~~~~~~~~~~~~~> Create event: Object %s/%s\n", e.Object.GetNamespace(), e.Object.GetName())
+			return true
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			log.Info("~~~~~~~~~~~~~> Update event: Object %s/%s\n", e.ObjectNew.GetNamespace(), e.ObjectNew.GetName())
+			uOld := e.ObjectOld.(*unstructured.Unstructured)
+			uNew := e.ObjectNew.(*unstructured.Unstructured)
+
+			fields := []string{"metadata", "spec", "status"}
+			for _, f := range fields {
+				oldF, _, _ := unstructured.NestedMap(uOld.Object, f)
+				newF, _, _ := unstructured.NestedMap(uNew.Object, f)
+
+				oldBytes, _ := json.Marshal(oldF)
+				newBytes, _ := json.Marshal(newF)
+
+				oldStr := string(oldBytes)
+				newStr := string(newBytes)
+
+				if oldStr != newStr {
+					//dmp := diffmatchpatch.New()
+					//diffs := dmp.DiffMain(oldStr, newStr, false)
+					log.Info("--DIFF--" + f)
+					log.Info(oldStr)
+					log.Info(newStr)
+				} else {
+					log.Info("--NO-DIFF--" + f)
+				}
+			}
+			log.Info("<~~~~~~~~~~~~~")
+
+			return true
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			log.Info("Delete event: Object %s/%s\n", e.Object.GetNamespace(), e.Object.GetName())
+			return true
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			log.Info("Generic event: Object %s/%s\n", e.Object.GetNamespace(), e.Object.GetName())
+			return true
+		},
+	}
+
+	if err := c.Watch(source.Kind(mgr.GetCache(), client.Object(o), &libhandler.InstrumentedEnqueueRequestForObject[client.Object]{}, customPredicates)); err != nil {
 		return err
 	}
 
-	if options.WatchDependentResources {
-		watchDependentResources(mgr, r, c)
-	}
+	//if options.WatchDependentResources {
+	//	watchDependentResources(mgr, r, c)
+	//}
 
 	log.Info("Watching resource", "apiVersion", options.GVK.GroupVersion(), "kind",
 		options.GVK.Kind, "reconcilePeriod", options.ReconcilePeriod.String())
 	return nil
+}
+
+var customPredicates = predicate2.Funcs{
+	CreateFunc: func(e event.CreateEvent) bool {
+		fmt.Printf("~~~~~~~~~~~~~> Create event: Object %s/%s\n", e.Object.GetNamespace(), e.Object.GetName())
+		return true
+	},
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		fmt.Printf("~~~~~~~~~~~~~> Update event: Object %s/%s\n", e.ObjectNew.GetNamespace(), e.ObjectNew.GetName())
+		var data1 string
+		var data2 string
+		var err error
+		if e.ObjectOld != nil {
+			data1, err = PrettyPrint(e.ObjectOld)
+			if err == nil {
+				fmt.Println(data1)
+			}
+		}
+		fmt.Println()
+		if e.ObjectNew != nil {
+			data2, err = PrettyPrint(e.ObjectNew)
+			if err == nil {
+				fmt.Println(data2)
+			}
+		}
+		if data1 != "" && data2 != "" {
+			fmt.Println()
+			dmp := diffmatchpatch.New()
+			diffs := dmp.DiffMain(data1, data2, false)
+			fmt.Println(dmp.DiffPrettyText(diffs))
+		}
+		fmt.Printf("<~~~~~~~~~~~~~\n")
+		return true
+	},
+	DeleteFunc: func(e event.DeleteEvent) bool {
+		fmt.Printf("Delete event: Object %s/%s\n", e.Object.GetNamespace(), e.Object.GetName())
+		return true
+	},
+	GenericFunc: func(e event.GenericEvent) bool {
+		fmt.Printf("Generic event: Object %s/%s\n", e.Object.GetNamespace(), e.Object.GetName())
+		return true
+	},
+}
+
+func PrettyPrint(obj client.Object) (string, error) {
+	// Create a new JSON serializer
+	serializer := k8sjson.NewSerializer(k8sjson.DefaultMetaFactory, nil, nil, false)
+
+	// Marshal the object to JSON
+	var buf bytes.Buffer
+	err := serializer.Encode(obj, &buf)
+	if err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
 // watchDependentResources adds a release hook function to the HelmOperatorReconciler
@@ -146,6 +253,7 @@ func watchDependentResources(mgr manager.Manager, r *HelmOperatorReconciler, c c
 					if err != nil {
 						return err
 					}
+					fmt.Println("******** Watch/Owner: " + gvkDependent.String())
 				} else { // Setup watch using annotations.
 					err = c.Watch(
 						source.Kind(
@@ -156,6 +264,7 @@ func watchDependentResources(mgr manager.Manager, r *HelmOperatorReconciler, c c
 					if err != nil {
 						return err
 					}
+					fmt.Println("******** Watch/Annotation: " + gvkDependent.String())
 				}
 				m.Lock()
 				watches[gvkDependent] = struct{}{}

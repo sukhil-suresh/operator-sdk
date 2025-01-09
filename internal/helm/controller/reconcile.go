@@ -75,6 +75,8 @@ const (
 // release changes are necessary, Reconcile will create or patch the underlying
 // resources to match the expected release manifest.
 
+var counter int
+
 func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) { //nolint:gocyclo
 	o := &unstructured.Unstructured{}
 	o.SetGroupVersionKind(r.GVK)
@@ -86,25 +88,33 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 		"apiVersion", o.GetAPIVersion(),
 		"kind", o.GetKind(),
 	)
-	log.V(1).Info("Reconciling")
+
+	log.V(1).Info(fmt.Sprintf("******** Reconciling %d", counter))
+	counter++
 
 	err := r.Client.Get(ctx, request.NamespacedName, o)
 	if apierrors.IsNotFound(err) {
+		log.V(1).Info("--------------- Return 1")
 		return reconcile.Result{}, nil
 	}
 	if err != nil {
 		log.Error(err, "Failed to lookup resource")
+		log.V(1).Info("--------------- Return 2")
 		return reconcile.Result{}, err
 	}
 
 	manager, err := r.ManagerFactory.NewManager(o, r.OverrideValues, r.DryRunOption)
 	if err != nil {
 		log.Error(err, "Failed to get release manager")
+		log.V(1).Info("--------------- Return 3")
 		return reconcile.Result{}, err
 	}
 
 	status := types.StatusFor(o)
+	//clonedStatus := deepcopy.Copy(status)
 	log = log.WithValues("release", manager.ReleaseName())
+	//str, _ := json.MarshalIndent(status, "", "  ")
+	//log.V(1).Info("** OLD status of " + string(str))
 
 	reconcileResult := reconcile.Result{RequeueAfter: r.ReconcilePeriod}
 	// Determine the correct reconcile period based on the existing value in the reconciler and the
@@ -114,15 +124,20 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 	finalReconcilePeriod, err := determineReconcilePeriod(r.ReconcilePeriod, o)
 	if err != nil {
 		log.Error(err, "Error: unable to parse reconcile period from the custom resource's annotations")
+		log.V(1).Info("--------------- Return 4")
 		return reconcile.Result{}, err
 	}
 	reconcileResult.RequeueAfter = finalReconcilePeriod
+	log.V(1).Info(fmt.Sprintf("******** Reconcile period set to %s", finalReconcilePeriod))
 
 	if o.GetDeletionTimestamp() != nil {
+		log.V(1).Info("******** Deleting release")
+
 		if !(controllerutil.ContainsFinalizer(o, uninstallFinalizer) ||
 			controllerutil.ContainsFinalizer(o, uninstallFinalizerLegacy)) {
 
 			log.Info("Resource is terminated, skipping reconciliation")
+			log.V(1).Info("--------------- Return 5")
 			return reconcile.Result{}, nil
 		}
 
@@ -135,9 +150,12 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 				Reason:  types.ReasonUninstallError,
 				Message: err.Error(),
 			})
+			log.V(1).Info("--------------- updateResourceStatus 6")
 			if err := r.updateResourceStatus(ctx, o, status); err != nil {
 				log.Error(err, "Failed to update status after uninstall release failure")
 			}
+
+			log.V(1).Info("--------------- Return 6")
 			return reconcile.Result{}, err
 		}
 		status.RemoveCondition(types.ConditionReleaseFailed)
@@ -167,8 +185,10 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 				Message: "Waiting until all resources are deleted.",
 			})
 		}
+		log.V(1).Info("--------------- updateResourceStatus 7")
 		if err := r.updateResourceStatus(ctx, o, status); err != nil {
 			log.Info("Failed to update CR status")
+			log.V(1).Info("--------------- Return 7")
 			return reconcile.Result{}, err
 		}
 
@@ -183,11 +203,14 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 					Reason:  types.ReasonUninstallError,
 					Message: err.Error(),
 				})
+				log.V(1).Info("--------------- updateResourceStatus 8")
 				_ = r.updateResourceStatus(ctx, o, status)
+				log.V(1).Info("--------------- Return 8")
 				return reconcile.Result{}, err
 			}
 			if !isAllResourcesDeleted {
 				log.Info("Waiting until all resources are deleted")
+				log.V(1).Info("--------------- Return 9")
 				return reconcileResult, nil
 			}
 			status.RemoveCondition(types.ConditionReleaseFailed)
@@ -198,6 +221,7 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 		controllerutil.RemoveFinalizer(o, uninstallFinalizerLegacy)
 		if err := r.updateResource(ctx, o); err != nil {
 			log.Info("Failed to remove CR uninstall finalizer")
+			log.V(1).Info("--------------- Return 10")
 			return reconcile.Result{}, err
 		}
 
@@ -207,9 +231,11 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 		// nothing left to do.
 		if err := r.waitForDeletion(ctx, o); err != nil {
 			log.Info("Failed waiting for CR deletion")
+			log.V(1).Info("--------------- Return 11")
 			return reconcile.Result{}, err
 		}
 
+		log.V(1).Info("--------------- Return 12")
 		return reconcile.Result{}, nil
 	}
 
@@ -226,14 +252,18 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 			Reason:  types.ReasonReconcileError,
 			Message: err.Error(),
 		})
+		log.V(1).Info("--------------- updateResourceStatus 13")
 		if err := r.updateResourceStatus(ctx, o, status); err != nil {
 			log.Error(err, "Failed to update status after sync release failure")
 		}
+		log.V(1).Info("--------------- Return 13")
 		return reconcile.Result{}, err
 	}
 	status.RemoveCondition(types.ConditionIrreconcilable)
 
 	if !manager.IsInstalled() {
+		log.V(1).Info("******** Not installed")
+
 		for k, v := range r.OverrideValues {
 			if r.SuppressOverrideValues {
 				v = "****"
@@ -250,9 +280,11 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 				Reason:  types.ReasonInstallError,
 				Message: err.Error(),
 			})
+			log.V(1).Info("--------------- updateResourceStatus 14")
 			if err := r.updateResourceStatus(ctx, o, status); err != nil {
 				log.Error(err, "Failed to update status after install release failure")
 			}
+			log.V(1).Info("--------------- Return 14")
 			return reconcile.Result{}, err
 		}
 		status.RemoveCondition(types.ConditionReleaseFailed)
@@ -261,12 +293,15 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 		controllerutil.AddFinalizer(o, uninstallFinalizer)
 		if err := r.updateResource(ctx, o); err != nil {
 			log.Info("Failed to add CR uninstall finalizer")
+			log.V(1).Info("--------------- Return 15")
 			return reconcile.Result{}, err
 		}
 
 		if r.releaseHook != nil {
+			log.V(1).Info("******** releaseHook != nil 16")
 			if err := r.releaseHook(installedRelease); err != nil {
 				log.Error(err, "Failed to run release hook")
+				log.V(1).Info("--------------- Return 16")
 				return reconcile.Result{}, err
 			}
 		}
@@ -290,7 +325,9 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 			Name:     installedRelease.Name,
 			Manifest: installedRelease.Manifest,
 		}
+		log.V(1).Info("--------------- updateResourceStatus 17")
 		err = r.updateResourceStatus(ctx, o, status)
+		log.V(1).Info("--------------- Return 17")
 		return reconcileResult, err
 	}
 
@@ -301,11 +338,14 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 		controllerutil.AddFinalizer(o, uninstallFinalizer)
 		if err := r.updateResource(ctx, o); err != nil {
 			log.Info("Failed to add CR uninstall finalizer")
+			log.V(1).Info("--------------- Return 18")
 			return reconcile.Result{}, err
 		}
 	}
 
 	if manager.IsUpgradeRequired() {
+		log.V(1).Info("******** Upgrade is required")
+
 		for k, v := range r.OverrideValues {
 			if r.SuppressOverrideValues {
 				v = "****"
@@ -333,16 +373,20 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 				Reason:  types.ReasonUpgradeError,
 				Message: err.Error(),
 			})
+			log.V(1).Info("--------------- updateResourceStatus 19")
 			if err := r.updateResourceStatus(ctx, o, status); err != nil {
 				log.Error(err, "Failed to update status after sync release failure")
 			}
+			log.V(1).Info("--------------- Return 19")
 			return reconcile.Result{}, err
 		}
 		status.RemoveCondition(types.ConditionReleaseFailed)
 
 		if r.releaseHook != nil {
+			log.V(1).Info("******** releaseHook != nil 20")
 			if err := r.releaseHook(upgradedRelease); err != nil {
 				log.Error(err, "Failed to run release hook")
+				log.V(1).Info("--------------- Return 20")
 				return reconcile.Result{}, err
 			}
 		}
@@ -366,7 +410,9 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 			Name:     upgradedRelease.Name,
 			Manifest: upgradedRelease.Manifest,
 		}
+		log.V(1).Info("--------------- updateResourceStatus 21")
 		err = r.updateResourceStatus(ctx, o, status)
+		log.V(1).Info("--------------- Return 21")
 		return reconcileResult, err
 	}
 
@@ -387,21 +433,25 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 			Reason:  types.ReasonReconcileError,
 			Message: err.Error(),
 		})
+		log.V(1).Info("--------------- updateResourceStatus 22")
 		if err := r.updateResourceStatus(ctx, o, status); err != nil {
 			log.Error(err, "Failed to update status after reconcile release failure")
 		}
+		log.V(1).Info("--------------- Return 22")
 		return reconcile.Result{}, err
 	}
 	status.RemoveCondition(types.ConditionIrreconcilable)
 
 	if r.releaseHook != nil {
+		log.V(1).Info("******** releaseHook != nil 23")
 		if err := r.releaseHook(expectedRelease); err != nil {
 			log.Error(err, "Failed to run release hook")
+			log.V(1).Info("--------------- Return 23")
 			return reconcile.Result{}, err
 		}
 	}
 
-	log.Info("Reconciled release")
+	log.Info("******** Reconciled release ********")
 	reason := types.ReasonUpgradeSuccessful
 	if expectedRelease.Version == 1 {
 		reason = types.ReasonInstallSuccessful
@@ -421,7 +471,17 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 		Manifest: expectedRelease.Manifest,
 	}
 
+	//if deep.Equal(status, clonedStatus) != nil {
+	//	log.V(1).Info("--------------- updateResourceStatus 24")
 	err = r.updateResourceStatus(ctx, o, status)
+	//} else {
+	//	log.V(1).Info("--------------- updateResourceStatus 24 IGNORED")
+	//}
+
+	//status2 := types.StatusFor(o)
+	//str, _ = json.MarshalIndent(status2, "", "  ")
+	//log.V(1).Info("** NEW status of " + string(str))
+	log.V(1).Info("--------------- Return 24")
 	return reconcileResult, err
 }
 
