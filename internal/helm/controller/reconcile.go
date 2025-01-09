@@ -18,10 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/mohae/deepcopy"
 	rpb "helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage/driver"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -58,6 +60,8 @@ type HelmOperatorReconciler struct {
 	DryRunOption           string
 }
 
+var reconciles, statusUpdates, statusEqualSkips int64
+
 const (
 	// uninstallFinalizer is added to CRs so they are cleaned up after uninstalling a release.
 	uninstallFinalizer = "helm.sdk.operatorframework.io/uninstall-release"
@@ -76,6 +80,8 @@ const (
 // resources to match the expected release manifest.
 
 func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) { //nolint:gocyclo
+	reconciles++
+
 	o := &unstructured.Unstructured{}
 	o.SetGroupVersionKind(r.GVK)
 	o.SetNamespace(request.Namespace)
@@ -104,6 +110,7 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 	}
 
 	status := types.StatusFor(o)
+	currentStatus := deepcopy.Copy(status)
 	log = log.WithValues("release", manager.ReleaseName())
 
 	reconcileResult := reconcile.Result{RequeueAfter: r.ReconcilePeriod}
@@ -401,7 +408,7 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 		}
 	}
 
-	log.Info("Reconciled release")
+	log.Info(fmt.Sprintf("Reconciled release %d", reconciles))
 	reason := types.ReasonUpgradeSuccessful
 	if expectedRelease.Version == 1 {
 		reason = types.ReasonInstallSuccessful
@@ -421,7 +428,12 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 		Manifest: expectedRelease.Manifest,
 	}
 
-	err = r.updateResourceStatus(ctx, o, status)
+	if reflect.DeepEqual(status, currentStatus) {
+		statusEqualSkips++
+	} else {
+		err = r.updateResourceStatus(ctx, o, status)
+	}
+	log.V(1).Info(fmt.Sprintf("Count - reconciles %d, statusUpdates %d, statusEqualSkips %d", reconciles, statusUpdates, statusEqualSkips))
 	return reconcileResult, err
 }
 
@@ -481,6 +493,7 @@ func (r HelmOperatorReconciler) updateResource(ctx context.Context, o client.Obj
 }
 
 func (r HelmOperatorReconciler) updateResourceStatus(ctx context.Context, o *unstructured.Unstructured, status *types.HelmAppStatus) error {
+	statusUpdates++
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		o.Object["status"] = status
 		return r.Client.Status().Update(ctx, o)
