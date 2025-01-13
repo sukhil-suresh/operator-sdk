@@ -15,11 +15,24 @@
 package controller
 
 import (
+	"context"
+	"fmt"
+	"github.com/google/go-cmp/cmp"
+	rpb "helm.sh/helm/v3/pkg/release"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	apitypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/operator-framework/operator-sdk/internal/helm/release"
 )
 
 func TestDetermineReconcilePeriod(t *testing.T) {
@@ -250,4 +263,152 @@ func Test_readBoolAnnotationWithDefault(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSkipNoStatusChangeUpdates(t *testing.T) {
+
+	helmRelease := &rpb.Release{
+		Name: "release-name",
+		Info: &rpb.Info{
+			Notes: "helm-release-deployment-message",
+		},
+		Manifest: "deployed-release-manifest",
+	}
+
+	gvk := schema.GroupVersionKind{
+		Group:   "group",
+		Version: "version",
+		Kind:    "kind",
+	}
+	obj := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"kind":       gvk.Kind,
+			"apiVersion": gvk.GroupVersion().String(),
+			"metadata": map[string]interface{}{
+				"name":      "name",
+				"namespace": "namespace",
+			},
+			"spec": map[string]interface{}{},
+			//"status": map[string]interface{}{},
+			//"status": &types.HelmAppStatus{
+			//	Conditions:      []types.HelmAppCondition{
+			//		types.HelmAppCondition{},
+			//	},
+			//	DeployedRelease: nil,
+			//},
+
+			//"status": map[string]interface{}{
+			//	"conditions": []interface{}{
+			//		map[string]interface{}{
+			//			"type":               "Initialized",
+			//			"status":             "True",
+			//			"lastTransitionTime": "2025-01-11T01:01:39Z",
+			//		},
+			//		map[string]interface{}{
+			//			"type":               "Deployed",
+			//			"status":             "True",
+			//			"reason":             "UpgradeSuccessful",
+			//			"message":            helmRelease.Info.Notes,
+			//			"lastTransitionTime": "2025-01-11T01:02:45Z",
+			//		},
+			//	},
+			//	"deployedRelease": map[string]interface{}{
+			//		"manifest": helmRelease.Manifest,
+			//	},
+			//},
+		},
+	}
+
+	status
+	cli := fakeclient.NewClientBuilder().WithRuntimeObjects(obj).WithInterceptorFuncs(interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, client client.Client, subResourceName string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			fmt.Printf("subResourceName: %s\n", subResourceName)
+			return nil
+		},
+	}).Build()
+
+	reconciler := &HelmOperatorReconciler{
+		Client:        cli,
+		EventRecorder: record.NewFakeRecorder(100),
+		GVK:           gvk,
+		ManagerFactory: &FakeManagerFactory{
+			manager: &FakeHelmManager{
+				release: helmRelease,
+				err:     nil,
+			},
+		},
+		ReconcilePeriod:        0,
+		OverrideValues:         nil,
+		SuppressOverrideValues: false,
+		releaseHook:            nil,
+		DryRunOption:           "",
+	}
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: apitypes.NamespacedName{
+			Namespace: obj.GetNamespace(),
+			Name:      obj.GetName(),
+		},
+	})
+	assert.Nil(t, err)
+
+	var updatedObj unstructured.Unstructured
+	err = cli.Get(context.Background(), client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}, &updatedObj)
+
+	diff := cmp.Diff(obj, updatedObj)
+	fmt.Println(diff)
+	//assert.True(t, reflect.DeepEqual(obj, updatedObj))
+}
+
+type FakeManagerFactory struct {
+	manager release.Manager
+}
+
+func (f *FakeManagerFactory) NewManager(cr *unstructured.Unstructured, overrideValues map[string]string, dryRunOption string) (release.Manager, error) {
+	return f.manager, nil
+}
+
+type FakeHelmManager struct {
+	release *rpb.Release
+	err     error
+}
+
+func (f *FakeHelmManager) ReleaseName() string {
+	return ""
+}
+
+func (f *FakeHelmManager) IsInstalled() bool {
+	return true
+}
+
+func (f *FakeHelmManager) IsUpgradeRequired() bool {
+	return false
+}
+
+func (f *FakeHelmManager) Sync() error {
+	return f.err
+}
+
+func (f *FakeHelmManager) InstallRelease(option ...release.InstallOption) (*rpb.Release, error) {
+	return f.release, f.err
+}
+
+func (f *FakeHelmManager) UpgradeRelease(option ...release.UpgradeOption) (*rpb.Release, *rpb.Release, error) {
+	return f.release, f.release, f.err
+}
+
+func (f *FakeHelmManager) RollBack(option ...release.RollBackOption) error {
+	return f.err
+}
+
+func (f *FakeHelmManager) ReconcileRelease(context.Context) (*rpb.Release, error) {
+	return f.release, f.err
+}
+
+func (f *FakeHelmManager) UninstallRelease(option ...release.UninstallOption) (*rpb.Release, error) {
+	return f.release, f.err
+}
+
+func (f *FakeHelmManager) CleanupRelease(s string) (bool, error) {
+	return true, f.err
 }

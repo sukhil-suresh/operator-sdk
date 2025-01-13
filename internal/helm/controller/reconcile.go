@@ -16,6 +16,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -421,7 +422,11 @@ func (r HelmOperatorReconciler) Reconcile(ctx context.Context, request reconcile
 		Manifest: expectedRelease.Manifest,
 	}
 
+	fmt.Println("Pre updateResourceStatus")
+	j, _ := json.MarshalIndent(status, "", "  ")
+	fmt.Println(string(j))
 	err = r.updateResourceStatus(ctx, o, status)
+	fmt.Println("Post updateResourceStatus")
 	return reconcileResult, err
 }
 
